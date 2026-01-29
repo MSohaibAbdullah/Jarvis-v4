@@ -1,0 +1,7 @@
+{
+  "name": "Copy of JARVIS Sovereign Interface",
+  "description": "A high-fidelity, sovereign technical intelligence interface designed for elite engineers. Local-first, file-driven, and voice-enabled.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
