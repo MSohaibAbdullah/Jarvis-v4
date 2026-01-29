@@ -1,10 +1,13 @@
 import { GoogleGenAI, GenerateContentStreamResult, Part } from "@google/genai";
 import { FileDoc, Message } from "../types";
 
+/* =========================
+   API KEY (HARDCODED)
+   ========================= */
+const API_KEY = "AIzaSyDbd2McnxPgTM2KKb2gNQ5DDXuiAyKc9YY";
+
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API_KEY_MISSING");
-  return new GoogleGenAI({ apiKey });
+  return new GoogleGenAI({ apiKey: API_KEY });
 };
 
 const SYSTEM_INSTRUCTION_BASE = `
@@ -47,8 +50,6 @@ export const streamChatResponse = async (
   if (files.length > 0) {
     contextPrompt = "\n\n=== INTERNAL DATA NODE (CONTEXT) ===\n";
     files.forEach(f => {
-      // Truncate large files for context window safety if necessary, though Gemini 1.5/2.5 has large context.
-      // We assume text content here.
       contextPrompt += `\nFILE: ${f.name}\nCONTENT:\n${f.content.substring(0, 50000)}\n----------------\n`;
     });
     contextPrompt += "\n=== END INTERNAL DATA ===\n\n";
@@ -56,19 +57,14 @@ export const streamChatResponse = async (
 
   const systemInstruction = SYSTEM_INSTRUCTION_BASE + contextPrompt;
 
-  // Last message is the user prompt, remove it from history to avoid duplication if passed separately
   const history = formatHistory(messages);
-
   const model = client.models;
   
-  // Config: enable googleSearch for fallback
   const config: any = {
     systemInstruction: systemInstruction,
     tools: [{ googleSearch: {} }]
   };
 
-  // Enable Thinking for Pro model
-  // Optimized budget: 4096 (Enough for reasoning, faster start than 32k)
   if (modelName === 'gemini-3-pro-preview') {
     config.thinkingConfig = { thinkingBudget: 4096 };
   }
@@ -84,8 +80,6 @@ export const streamChatResponse = async (
     });
 
     for await (const chunk of result) {
-      // Accessing chunk.text directly triggers a warning in the SDK if the chunk contains 
-      // non-text parts (like functionCalls/googleSearch). We iterate parts manually to avoid this.
       const parts = chunk.candidates?.[0]?.content?.parts;
       if (parts) {
         for (const part of parts) {
@@ -110,17 +104,13 @@ export const generateImage = async (prompt: string): Promise<string> => {
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [{ text: prompt }]
-      },
-      // Note: gemini-2.5-flash-image generates images via generateContent but returns them in inlineData usually? 
-      // Actually checking documentation provided: "Generate images using gemini-2.5-flash-image... output response may contain both image and text parts... find the image part"
+      }
     });
 
-    // Check candidates for image
     const parts = response.candidates?.[0]?.content?.parts;
     if (parts) {
       for (const part of parts) {
         if (part.inlineData && part.inlineData.data) {
-          // It's base64 data
           return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
         }
       }
@@ -133,51 +123,54 @@ export const generateImage = async (prompt: string): Promise<string> => {
 };
 
 export const generateTitle = async (messages: Message[]): Promise<string> => {
-    const client = getClient();
-    // Only use the first exchange (User + Model) for title generation
-    const firstExchange = messages.slice(0, 2).map(m => `${m.role}: ${m.content}`).join('\n');
+  const client = getClient();
+  const firstExchange = messages
+    .slice(0, 2)
+    .map(m => `${m.role}: ${m.content}`)
+    .join('\n');
     
-    try {
-        const response = await client.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: `Analyze this conversation start and generate a very short, concise, and specific title (max 5 words). Do not use quotes or punctuation.\n\n${firstExchange}`,
-        });
-        return response.text?.trim() || "New Session";
-    } catch (e) {
-        console.error("Title Generation Error", e);
-        return "New Session";
-    }
+  try {
+    const response = await client.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Analyze this conversation start and generate a very short, concise, and specific title (max 5 words). Do not use quotes or punctuation.\n\n${firstExchange}`,
+    });
+    return response.text?.trim() || "New Session";
+  } catch (e) {
+    console.error("Title Generation Error", e);
+    return "New Session";
+  }
 };
 
-export const processVoiceCommand = async (audioBase64: string, files: FileDoc[]): Promise<string> => {
-    const client = getClient();
-    
-    let contextPrompt = "";
-    if (files.length > 0) {
-      contextPrompt = "Use this attached context if relevant to the user's spoken query:\n";
-      files.forEach(f => {
-        contextPrompt += `FILE: ${f.name}\nCONTENT: ${f.content.substring(0, 10000)}\n---\n`;
-      });
-    }
-
-    // Using gemini-3-flash-preview as it likely supports multimodal via generateContent
-    
-    const parts: Part[] = [
-        {
-            inlineData: {
-                mimeType: "audio/wav", // Assuming WAV from MediaRecorder in frontend
-                data: audioBase64
-            }
-        },
-        {
-            text: `(System: Transcribe and answer. Language: Urdu, English, or Hinglish. ${contextPrompt})`
-        }
-    ];
-
-    const response = await client.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: { parts }
+export const processVoiceCommand = async (
+  audioBase64: string,
+  files: FileDoc[]
+): Promise<string> => {
+  const client = getClient();
+  
+  let contextPrompt = "";
+  if (files.length > 0) {
+    contextPrompt = "Use this attached context if relevant to the user's spoken query:\n";
+    files.forEach(f => {
+      contextPrompt += `FILE: ${f.name}\nCONTENT: ${f.content.substring(0, 10000)}\n---\n`;
     });
+  }
 
-    return response.text || "Audio signal degraded. Retrying recommended.";
+  const parts: Part[] = [
+    {
+      inlineData: {
+        mimeType: "audio/wav",
+        data: audioBase64
+      }
+    },
+    {
+      text: `(System: Transcribe and answer. Language: Urdu, English, or Hinglish. ${contextPrompt})`
+    }
+  ];
+
+  const response = await client.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: { parts }
+  });
+
+  return response.text || "Audio signal degraded. Retrying recommended.";
 };
